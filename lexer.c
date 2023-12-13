@@ -179,13 +179,11 @@ Token lexToken() {
 	char c = advance();
 
 	if (isDigit(c)) {
-		log("num");
 		return number();
 	}
 	if (isAlpha(c)) {
 		return identifier();
 	}
-	log("OOOOOOOOOOOO");
 	switch (c)
 	{
 	case '(': return makeToken(TOKEN_LEFT_PAREN);

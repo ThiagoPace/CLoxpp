@@ -18,8 +18,12 @@ typedef struct {
 
 	Value stack[STACK_MAX];
 	Value* stackPtr;
+
+	Obj* objects;
 } VM;
 
+//A bit NURN
+extern VM vm;
 
 void initVM();
 void freeVM();

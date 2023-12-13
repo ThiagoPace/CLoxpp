@@ -145,6 +145,7 @@
     <ClCompile Include="lexer.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="memory.c" />
+    <ClCompile Include="object.c" />
     <ClCompile Include="value.c" />
     <ClCompile Include="vm.c" />
   </ItemGroup>
@@ -155,6 +156,7 @@
     <ClInclude Include="debug.h" />
     <ClInclude Include="lexer.h" />
     <ClInclude Include="memory.h" />
+    <ClInclude Include="object.h" />
     <ClInclude Include="value.h" />
     <ClInclude Include="vm.h" />
   </ItemGroup>
