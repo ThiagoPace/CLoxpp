@@ -1,3 +1,4 @@
+#include<string.h>
 #include "debug.h"
 #include "common.h"
 #include "lexer.h"
@@ -105,6 +106,7 @@ static Token number() {
 
 static TokenType checkKeyword(int start, int length, char* rest, TokenType type) {
 	//IPA
+	//ERRO: esquisito com -true
 	if (lexer.current - lexer.start == start + length
 		&& memcmp(lexer.start + start, rest, length) == 0) {
 		return type;

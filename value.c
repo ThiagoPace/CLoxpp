@@ -43,12 +43,12 @@ bool valuesEqual(Value a, Value b)
 	case VAL_OBJ:
 		switch (AS_OBJ(a)->type)
 		{
-		case OBJ_STRING: {
-			ObjString* astring = AS_STRING(a);
+		case OBJ_STRING: return AS_OBJ(a) == AS_OBJ(b);
+			/*ObjString* astring = AS_STRING(a);
 			ObjString* bstring = AS_STRING(b);
 			return astring->length == bstring->length
-				&& memcmp(astring->chars, bstring->chars, astring->length) == 0;
-		}
+				&& memcmp(astring->chars, bstring->chars, astring->length) == 0;*/
+		
 		}
 	}
 }
