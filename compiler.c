@@ -193,6 +193,9 @@ static bool identifiersEqual(Token* a, Token* b) {
 static int resolveLocal(Compiler* compiler, Token* name) {
 	for (int i = compiler->localCount - 1; i >= 0 ;i--) {
 		if (identifiersEqual(name, &(compiler->locals[i].name))) {
+			if (compiler->locals[i].depth == -1) {
+				error("Can't read local variable in its own initializer.");
+			}
 			return i;
 		}
 	}
@@ -200,9 +203,14 @@ static int resolveLocal(Compiler* compiler, Token* name) {
 }
 
 static void addLocal(Token* name) {
+	if (current->localCount == UINT8_COUNT) {
+		error("Too many local variables in function.");
+		return;
+	}
 	Local* local = &current->locals[current->localCount++];
 	local->name = *name;
-	local->depth = current->scopeDepth;
+	local->depth = -1;
+	//local->depth = current->scopeDepth;
 }
 
 //For locals only
@@ -210,6 +218,16 @@ static void declareVariable() {
 	if (current->scopeDepth == 0)	return;
 
 	Token* name = &parser.previous;
+	for (int i = current->localCount - 1;i >= 0;i--) {
+		Local* local = &current->locals[i];
+		if (local->depth != -1 && local->depth < current->scopeDepth) {
+			break;
+		}
+
+		if (identifiersEqual(name, &local->name)) {
+			error("Already a variable with this name in this scope.");
+		}
+	}
 	addLocal(name);
 }
 
@@ -221,8 +239,16 @@ static uint8_t parseVariable(char* message) {
 
 	return identifierConstant(&parser.previous);
 }
+
+static void markInitialized() {
+	current->locals[current->localCount - 1].depth = current->scopeDepth;
+}
+
 static void defineVariable(uint8_t global) {
-	if (current->scopeDepth > 0)	return;
+	if (current->scopeDepth > 0) {
+		markInitialized();
+		return;
+	}
 	emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
@@ -250,9 +276,78 @@ static void expressionStatement() {
 	emitByte(OP_POP);
 }
 
+//Returns offset of the opcode
+static int emitJump(uint8_t instruction) {
+	emitByte(instruction);
+	emitByte(0xff);
+	emitByte(0xff);
+	return currentChunk()->count - 2;
+}
+
+static void patchJump(int offset) {
+	int jump = currentChunk()->count - 2 - offset;
+
+	if (jump > UINT16_MAX) {
+		error("Too much code to jump over.");
+	}
+
+	currentChunk()->code[offset] = (jump >> 8) & 0xff;
+	currentChunk()->code[offset + 1] = jump & 0xff;
+}
+
+static void ifStatement() {
+	consume(TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+	expression();
+	consume(TOKEN_RIGHT_PAREN, "Expect ')' after if condition.");
+
+	int thenJump = emitJump(OP_JUMP_IF_FALSE);
+	emitByte(OP_POP);
+	declaration();
+	
+	int elseJump = emitJump(OP_JUMP);
+	patchJump(thenJump);
+	emitByte(OP_POP);
+
+	if (match(TOKEN_ELSE))	declaration();
+
+	patchJump(elseJump);
+}
+
+static void emitLoop(int loopStart) {
+	emitByte(OP_LOOP);
+
+	int offset = currentChunk()->count + 2 - loopStart;
+	if (offset > UINT16_MAX) {
+		error("Loop body too large.");
+	}
+
+	emitByte((offset >> 8) & 0xff);
+	emitByte(offset & 0xff);
+}
+
+static void whileStatement() {
+	int loopStart = currentChunk()->count;
+	consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+	expression();
+	consume(TOKEN_RIGHT_PAREN, "Expect ')' after while condition.");
+
+	int thenJump = emitJump(OP_JUMP_IF_FALSE);
+	emitByte(OP_POP);
+	declaration();
+
+
+	emitLoop(loopStart);
+	patchJump(thenJump);
+	emitByte(OP_POP);
+}
+
 static void statement() {
 	if (match(TOKEN_PRINT))
-		printStatement();	
+		printStatement();
+	else if (match(TOKEN_IF))
+		ifStatement();
+	else if (match(TOKEN_WHILE))
+		whileStatement();
 	else if (match(TOKEN_LEFT_BRACE)) {
 		beginScope();
 		block();
@@ -270,6 +365,8 @@ static void declaration() {
 
 static void number(bool canAssign) {
 	double value = strtod(parser.previous.lexemeStart, NULL);
+	log("num");
+	printf("%g", value);
 	emitBytes(OP_CONSTANT, makeConstant(NUMBER_VAL(value)));
 }
 static void string(bool canAssign) {
@@ -294,6 +391,34 @@ static void namedVariable(Token* name, bool canAssign) {
 		expression();
 		emitBytes(setOp, arg);
 	} 
+	else if (canAssign && 
+		(match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_MINUS) || match(TOKEN_STAR_EQUAL) || match(TOKEN_SLASH_EQUAL)
+			|| match(TOKEN_PERCENT_EQUAL))) {
+
+		uint8_t op;
+		switch (parser.previous.type)
+		{
+		case TOKEN_PLUS_EQUAL: op = OP_ADD; break;
+		case TOKEN_MINUS_EQUAL: op = OP_SUBTRACT; break;
+		case TOKEN_STAR_EQUAL: op = OP_MULTIPLY; break;
+		case TOKEN_SLASH_EQUAL: op = OP_DIVIDE; break;
+		case TOKEN_PERCENT_EQUAL: op = OP_MOD; break;
+
+		default: op = 0; break; //Unreachable
+		}
+		emitBytes(getOp, arg);
+		expression();
+
+		emitByte(op);
+		emitBytes(setOp, arg);
+	}
+	else if (canAssign && (match(TOKEN_PLUS_PLUS) || match(TOKEN_MINUS_MINUS)) ) {
+		emitBytes(getOp, arg);
+		int sign = parser.previous.type == TOKEN_PLUS_PLUS ? 1 : -1;
+		emitBytes(OP_CONSTANT, makeConstant(NUMBER_VAL(sign)));
+		emitByte(OP_ADD);
+		emitBytes(setOp, arg);
+	}
 	else{
 		emitBytes(getOp, arg);
 	}
@@ -305,6 +430,27 @@ static void grouping(bool canAssign) {
 	expression();
 	consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
+
+static void or_(bool canAssign) {
+	int elseJump = emitJump(OP_JUMP_IF_FALSE);
+	int endJump = emitJump(OP_JUMP);
+
+	patchJump(elseJump);
+	emitByte(OP_POP);
+
+	parsePrecedence(PREC_OR);
+
+	patchJump(endJump);
+}
+static void and_(bool canAssign) {
+	int endJump = emitJump(OP_JUMP_IF_FALSE);
+
+	emitByte(OP_POP);
+	parsePrecedence(PREC_AND);
+
+	patchJump(endJump);
+}
+
 static void unary(bool canAssign) {
 	TokenType operatorType = parser.previous.type;
 	parsePrecedence(PREC_UNARY);
@@ -346,6 +492,7 @@ static void binary(bool canAssign) {
 }
 
 static void literal(bool canAssign) {
+	log("WTFFFFFFFFF");
 	switch (parser.previous.type)
 	{
 	case TOKEN_NIL:		emitByte(OP_NIL); break;
@@ -386,7 +533,7 @@ ParseRule rules[] = {
 [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
 
 
-[TOKEN_AND] = {NULL, NULL, PREC_NONE},
+[TOKEN_AND] = {NULL, and_, PREC_AND},
 [TOKEN_CLASS] = {NULL, NULL, PREC_NONE},
 [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
 [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
@@ -394,7 +541,7 @@ ParseRule rules[] = {
 [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
 [TOKEN_IF] = {NULL, NULL, PREC_NONE},
 [TOKEN_NIL] = {literal, NULL, PREC_NONE},
-[TOKEN_OR] = {NULL, NULL, PREC_NONE},
+[TOKEN_OR] = {NULL, or_, PREC_OR},
 
 
 [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
@@ -407,7 +554,14 @@ ParseRule rules[] = {
 [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
 [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
 
-[TOKEN_PERCENT] = {NULL, binary, PREC_FACTOR}
+[TOKEN_PERCENT] = {NULL, binary, PREC_FACTOR},
+[TOKEN_PLUS_PLUS] = {NULL, NULL, PREC_NONE},
+[TOKEN_MINUS_MINUS] = {NULL, NULL, PREC_NONE},
+[TOKEN_PLUS_EQUAL] = {NULL, NULL, PREC_NONE},
+[TOKEN_MINUS_EQUAL] = {NULL, NULL, PREC_NONE},
+[TOKEN_STAR_EQUAL] = {NULL, NULL, PREC_NONE},
+[TOKEN_SLASH_EQUAL] = {NULL, NULL, PREC_NONE},
+[TOKEN_PERCENT_EQUAL] = {NULL, NULL, PREC_NONE},
 };
 
 static ParseRule* getRule(TokenType type) {

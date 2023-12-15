@@ -17,7 +17,7 @@
 	Forward declaration
 */
 
-#define MAX_INPUT_LENGTH 100
+#define MAX_INPUT_LENGTH 600
 
 int main() {
 

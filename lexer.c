@@ -106,7 +106,7 @@ static Token number() {
 
 static TokenType checkKeyword(int start, int length, char* rest, TokenType type) {
 	//IPA
-	//ERRO: esquisito com -true
+	//ERRO: true
 	if (lexer.current - lexer.start == start + length
 		&& memcmp(lexer.start + start, rest, length) == 0) {
 		return type;
@@ -143,8 +143,8 @@ static TokenType identifierType() {
 		if (lexer.current - lexer.start > 1) {
 			switch (lexer.start[1])
 			{
-			case 'h': return checkKeyword(2, 2, 'is', TOKEN_THIS);
-			case 'r': return checkKeyword(2, 2, 'ue', TOKEN_TRUE);
+			case 'h': return checkKeyword(2, 2, "is", TOKEN_THIS);
+			case 'r': return checkKeyword(2, 2, "ue", TOKEN_TRUE);
 			}
 		}
 		break;
@@ -195,9 +195,21 @@ Token lexToken() {
 	case ';': return makeToken(TOKEN_SEMICOLON);
 	case ',': return makeToken(TOKEN_COMMA);
 	case '.': return makeToken(TOKEN_DOT);
-	case '-': return makeToken(TOKEN_MINUS);
-	case '+': return makeToken(TOKEN_PLUS);
-	case '*': return makeToken(TOKEN_STAR);	case '%': return makeToken(TOKEN_PERCENT);
+	case '+':
+		if (match('='))
+			return makeToken(TOKEN_PLUS_EQUAL);
+		else
+			return makeToken(match('+') ? TOKEN_PLUS_PLUS : TOKEN_PLUS);
+	case '-':
+		if (match('='))
+			return makeToken(TOKEN_MINUS_EQUAL);
+		else
+			return makeToken(match('-') ? TOKEN_MINUS_MINUS : TOKEN_MINUS);
+		
+	case '*':
+		return makeToken(match('=') ? TOKEN_STAR_EQUAL : TOKEN_STAR);
+
+	case '%': return makeToken(match('=') ? TOKEN_PERCENT_EQUAL : TOKEN_PERCENT);
 
 	//Dependant binaries
 	case '!':
@@ -222,7 +234,7 @@ Token lexToken() {
 			}
 		}
 		else{
-			return makeToken(TOKEN_SLASH);
+			return makeToken(match('=') ? TOKEN_SLASH_EQUAL : TOKEN_SLASH);
 		}
 		break;
 
