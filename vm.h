@@ -14,6 +14,9 @@ typedef struct {
 	ObjFunction* function;
 	uint8_t* ip;
 	Value* frameSlots;
+	Value* defaultsStart;
+	//Defaults required (i.e., non instantiated at call)
+	int defaultsRequired;
 } CallFrame;
 
 

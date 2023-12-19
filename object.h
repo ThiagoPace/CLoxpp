@@ -40,6 +40,8 @@ struct ObjString
 typedef struct{
 	Obj obj;
 	int arity;
+	int defaults;
+
 	Chunk chunk;
 	ObjString* name;
 } ObjFunction;

@@ -37,6 +37,7 @@ typedef enum {
 	OP_JUMP_IF_FALSE,
 	OP_LOOP,
 
+	OP_SET_DEFAULT,
 	OP_CALL,
 	OP_RETURN
 } OpCode;

@@ -69,6 +69,35 @@ static void skipWhitespace() {
 			advance();
 			break;
 
+		case '/':
+			if (peekNext() == '/') {
+				while (peek() != '\n' && !isAtEnd()) {
+					advance();
+				}
+			}
+			else if (peekNext() == '*') {
+				advance();
+				advance();
+				while (peek() != '*' && !isAtEnd()) {
+					if (peek() == '\n')	lexer.line++;
+					advance();
+				}
+				advance();
+				if (isAtEnd) {
+					//ERROR
+				}
+				if (peek() == '/') {
+					advance();
+				}
+				else {
+					//ERROR
+				}
+			}
+			else {
+				return;
+			}
+			break;
+
 		default:
 			return;
 		}
@@ -235,14 +264,7 @@ Token lexToken() {
 
 	//Long binaries
 	case '/':
-		if (peekNext() == '/') {
-			while (peek() != '\n' && !isAtEnd()) {
-				advance();
-			}
-		}
-		else{
-			return makeToken(match('=') ? TOKEN_SLASH_EQUAL : TOKEN_SLASH);
-		}
+		return makeToken(match('=') ? TOKEN_SLASH_EQUAL : TOKEN_SLASH);
 		break;
 
 	//Strings

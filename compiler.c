@@ -314,7 +314,35 @@ static void function(FunctionType type) {
 			}
 			uint8_t parameter = parseVariable("Expect parameter name.");
 			defineVariable(parameter);
+
+			if (match(TOKEN_EQUAL)) {
+				expression();
+				emitBytes(OP_SET_DEFAULT, current->function->defaults);
+
+				current->function->defaults++;
+				break;
+			}
+
 		} while (match(TOKEN_COMMA));
+
+		//Define (but do not assign) defaults
+		if (match(TOKEN_COMMA)) {
+			do {
+				current->function->arity++;
+				if (current->function->arity > 255) {
+					errorAtCurrent("Can't have more than 255 parameters.");
+				}
+				uint8_t parameter = parseVariable("Expect parameter name.");
+				defineVariable(parameter);
+
+				consume(TOKEN_EQUAL, "Default parameters must be at the end.");
+
+				expression();
+				emitBytes(OP_SET_DEFAULT, current->function->defaults);
+
+				current->function->defaults++;
+			} while (match(TOKEN_COMMA));
+		}
 	}
 
 	consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");

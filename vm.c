@@ -88,19 +88,30 @@ static void concatenate() {
 }
 
 static bool call(ObjFunction* function, int argCount) {
+	int defaultsRequired = 0;
 	if (argCount != function->arity) {
-		runtimeError("Expected %d arguments but got %d.", function->arity, argCount);
-		return false;
+		if (argCount < function->arity - function->defaults || argCount > function->arity) {
+			//Error message can be improved
+			runtimeError("Expected %d arguments but got %d.", function->arity, argCount);
+			return false;
+		}
+
+		defaultsRequired = function->arity - argCount;
+		for (int i = 0; i < defaultsRequired;i++) {
+			push(NIL_VAL);
+		}
 	}
+
 	CallFrame* frame = &vm.frames[vm.frameCount++];
 	if (vm.frameCount > FRAMES_MAX) {
 		runtimeError("Stack overflow");
 		return false;
 	}
-
 	frame->function = function;
 	frame->ip = function->chunk.code;
-	frame->frameSlots = vm.stackPtr - argCount - 1;
+	frame->frameSlots = vm.stackPtr - (argCount + defaultsRequired) - 1;
+	frame->defaultsStart = vm.stackPtr - function->defaults;
+	frame->defaultsRequired = defaultsRequired;
 	return true;
 }
 
@@ -298,10 +309,20 @@ InterpretResult run()
 			break;
 		}
 
+		case OP_SET_DEFAULT: {
+			int defCount = READ_BYTE();
+			if (defCount < currentFrame->function->defaults - currentFrame->defaultsRequired) {
+				pop();
+				break;
+			}
+			Value def = pop();
+			currentFrame->defaultsStart[defCount] = def;
+			break;
+		}
 
 		case OP_CALL: {
 			int argCount = READ_BYTE();
-			if (!callValue(peek(argCount) ,argCount)) {
+			if (!callValue(peek(argCount), argCount)) {
 				return INTERPRET_RUNTIME_ERROR;
 			}
 			currentFrame = &vm.frames[vm.frameCount - 1];

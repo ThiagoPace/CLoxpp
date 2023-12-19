@@ -78,6 +78,8 @@ int dissassembleInstruction(Chunk* chunk, int offset)
 		return jumpInstruction("OP_LOOP", -1, chunk, offset);
 	case OP_CALL:
 		return byteInstruction("OP_CALL", chunk, offset);
+	case OP_SET_DEFAULT:
+		return byteInstruction("OP_SET_DEFAULT", chunk, offset);
 
 	default:
 		return offset + 1;

@@ -68,6 +68,7 @@ ObjFunction* newFunction()
 {
 	ObjFunction* function = ALLOCATE_OBJ(ObjFunction, OBJ_FUNCTION);
 	function->arity = 0;
+	function->defaults = 0;
 	function->name = NULL;
 	initChunk(&function->chunk);
 	return function;
