@@ -64,12 +64,29 @@ ObjString* copyString(const char* chars, int length)
 	return allocateString(heapString, length, hash);
 }
 
+ObjFunction* newFunction()
+{
+	ObjFunction* function = ALLOCATE_OBJ(ObjFunction, OBJ_FUNCTION);
+	function->arity = 0;
+	function->name = NULL;
+	initChunk(&function->chunk);
+	return function;
+}
+
+
 void printObj(Value value)
 {
 	switch (OBJ_TYPE(value))
 	{
 	case OBJ_STRING:
 		printf("%s", AS_CSTRING(value));
+		break;
+
+	case OBJ_FUNCTION:
+		if (AS_FUNCTION(value)->name == NULL)
+			printf("<script>");
+		else
+			printf("<func %s>", AS_FUNCTION(value)->name->chars);
 		break;
 
 	default:

@@ -32,9 +32,13 @@ int main() {
 		if (len > 0 && buffer[len - 1] == '\n') {
 			buffer[len - 1] = '\0';
 		}
+		for (int i = len - 1;i >= 0;i--) {
+			if (buffer[i] == '$')
+				buffer[i] = '\n';
+		}
 
 		// Print the entered string
-		printf("You entered: %s\n", buffer);
+		printf("%s\n", buffer);
 	}
 	else {
 		// Handle error if fgets fails

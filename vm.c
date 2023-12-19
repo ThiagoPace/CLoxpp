@@ -3,7 +3,6 @@
 #include <string.h>
 #include "compiler.h"
 #include "debug.h"
-#include "object.h"
 #include "memory.h"
 #include "vm.h"
 
@@ -11,6 +10,7 @@ VM vm;
 
 static void resetStack() {
 	vm.stackPtr = vm.stack;
+	vm.frameCount = 0;
 }
 
 static void runtimeError(const char* format, ...) {
@@ -21,10 +21,19 @@ static void runtimeError(const char* format, ...) {
 	fputs("\n", stderr);
 
 	//NURN: pq size_t no livro e n int?
-	//-1 pq é vm.ip++ (i.e., pós ++)
-	size_t instruction = vm.ip - vm.chunk->code - 1;
-	int line = vm.chunk->lines[instruction];
-	fprintf(stderr, "[line %d] in script\n", line);
+	for (int i = vm.frameCount - 1;i >= 0;i--) {
+		CallFrame* frame = &vm.frames[i];
+		size_t instruction = frame->ip - frame->function->chunk.code - 1;
+		int line = frame->function->chunk.lines[instruction];
+		fprintf(stderr, "[line %d] in ", line);
+		if (frame->function->name == NULL) {
+			fprintf(stderr, "script\n");
+		}
+		else {
+			fprintf(stderr, "%s()\n", frame->function->name->chars);
+		}
+	}
+
 	resetStack();
 }
 
@@ -78,33 +87,62 @@ static void concatenate() {
 	push(OBJ_VAL(result));
 }
 
-InterpretResult interpret(char* source)
-{
-	Chunk chunk;
-	initChunk(&chunk);
-
-	if (!compile(source, &chunk)) {
-		freeChunk(&chunk);
-		return INTERPRET_COMPILER_ERROR;
+static bool call(ObjFunction* function, int argCount) {
+	if (argCount != function->arity) {
+		runtimeError("Expected %d arguments but got %d.", function->arity, argCount);
+		return false;
+	}
+	CallFrame* frame = &vm.frames[vm.frameCount++];
+	if (vm.frameCount > FRAMES_MAX) {
+		runtimeError("Stack overflow");
+		return false;
 	}
 
-	disassembleChunk(&chunk, "just testing");
+	frame->function = function;
+	frame->ip = function->chunk.code;
+	frame->frameSlots = vm.stackPtr - argCount - 1;
+	return true;
+}
 
-	vm.chunk = &chunk;
-	vm.ip = vm.chunk->code;
+static bool callValue(Value callee, int argCount) {
+	if (IS_OBJ(callee)) {
+		switch (OBJ_TYPE(callee))
+		{
+		case OBJ_FUNCTION: {
+			return call(AS_FUNCTION(callee), argCount);
+		}
+		default: break;
+		}
+	}
+	runtimeError("Can only call functions and classes.");
+	return false;
+}
+
+InterpretResult interpret(char* source)
+{
+	ObjFunction* function = compile(source);
+	if (function == NULL) return INTERPRET_COMPILER_ERROR;
+
+	push(OBJ_VAL(function));
+	call(function, 0);
+	/*CallFrame* frame = &vm.frames[vm.frameCount++];
+	frame->function = function;
+	frame->ip = function->chunk.code;
+	frame->frameSlots = vm.stack;*/
+
 	InterpretResult result = run();
-
-	freeChunk(&chunk);
 
 	return result;
 }
 
 InterpretResult run()
 {
-#define READ_BYTE() (*vm.ip++)
-#define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])
+	CallFrame* currentFrame = &vm.frames[vm.frameCount - 1];
+
+#define READ_BYTE() (*currentFrame->ip++)
+#define READ_CONSTANT() (currentFrame->function->chunk.constants.values[READ_BYTE()])
 #define READ_STRING() AS_STRING(READ_CONSTANT())
-#define READ_SHORT() (vm.ip +=2, (uint16_t)((vm.ip[-2] << 8) | vm.ip[-1]))
+#define READ_SHORT() (currentFrame->ip +=2, (uint16_t)((currentFrame->ip[-2] << 8) | currentFrame->ip[-1]))
 #define BINARY_OP(valueType, op) \
 		do { \
 			if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { \
@@ -126,7 +164,7 @@ InterpretResult run()
 			printf(" ]");
 		}
 		printf("\n");
-		dissassembleInstruction(vm.chunk, (int)(vm.ip - vm.chunk->code));
+		dissassembleInstruction(&currentFrame->function->chunk, (int)(currentFrame->ip - currentFrame->function->chunk.code));
 #endif // DEBUG_TRACE_EXECUTION
 
 		uint8_t instruction;
@@ -227,13 +265,13 @@ InterpretResult run()
 
 		case OP_GET_LOCAL: {
 			uint8_t slot = READ_BYTE();
-			push(vm.stack[slot]);
+			push(currentFrame->frameSlots[slot]);
 			break;
 		}
 
 		case OP_SET_LOCAL: {
 			uint8_t slot = READ_BYTE();
-			vm.stack[slot] = peek(0);
+			currentFrame->frameSlots[slot] = peek(0);
 			break;
 		}
 
@@ -246,22 +284,42 @@ InterpretResult run()
 		case OP_JUMP_IF_FALSE: {
 			uint16_t jumpOffset = READ_SHORT();
 			if (isFalse(peek(0)))
-				vm.ip += jumpOffset;
+				currentFrame->ip += jumpOffset;
 			break;
 		}
 		case OP_JUMP: {
 			uint16_t jumpOffset = READ_SHORT();
-			vm.ip += jumpOffset;
+			currentFrame->ip += jumpOffset;
 			break;
 		}
 		case OP_LOOP: {
 			uint16_t loopOffset = READ_SHORT();
-			vm.ip -= loopOffset;
+			currentFrame->ip -= loopOffset;
 			break;
 		}
 
-		case OP_RETURN: 			
-			return INTERPRET_OK;
+
+		case OP_CALL: {
+			int argCount = READ_BYTE();
+			if (!callValue(peek(argCount) ,argCount)) {
+				return INTERPRET_RUNTIME_ERROR;
+			}
+			currentFrame = &vm.frames[vm.frameCount - 1];
+			break;
+		}
+
+		case OP_RETURN: {
+			Value result = pop();
+			vm.frameCount--;
+			if (vm.frameCount == 0) {
+				pop();
+				return INTERPRET_OK;
+			}
+			vm.stackPtr = currentFrame->frameSlots;
+			push(result);
+			currentFrame = &vm.frames[vm.frameCount - 1];
+			break;
+		}
 
 		default:
 			break;

@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include<string.h>
 #include "debug.h"
 #include "common.h"
@@ -61,6 +62,12 @@ static void skipWhitespace() {
 		case '\r':
 		case '\t':
 			advance();
+			break;
+
+		case '\n':
+			lexer.line++;
+			advance();
+			break;
 
 		default:
 			return;
@@ -242,8 +249,9 @@ Token lexToken() {
 	case '"': return string();
 
 	//Special characters
-	case '\n': lexer.line++; break;
 
+	default:
+		printf(c);
+		return errorToken("Unexpected character.");
 	}
-	return errorToken("Unexpected character.");
 }

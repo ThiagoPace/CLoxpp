@@ -18,6 +18,7 @@ void freeTable(Table* table)
 	initTable(table);
 }
 
+//Method used for internalizing all strings. Used for copy and taking methods in object.c
 ObjString* findTableString(Table* table, char* chars, int length, uint32_t hash)
 {
 	if (table->count == 0)	return NULL;
