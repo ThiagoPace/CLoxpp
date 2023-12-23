@@ -42,11 +42,13 @@ typedef struct {
 	//Variables
 	Table globals;
 
+	//Classes
+	ObjString* initString;
+
 	//GC
 	int grayCapacity;
 	int grayCount;
 	Obj** grayStack;
-
 	size_t bytesAllocated;
 	size_t nextGC;
 } VM;

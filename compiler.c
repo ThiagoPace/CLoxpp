@@ -54,7 +54,8 @@ typedef struct {
 
 typedef enum {
 	TYPE_SCRIPT,
-	TYPE_FUNCTION
+	TYPE_METHOD,
+	TYPE_FUNCTION,
 } FunctionType;
 
 typedef struct {
@@ -77,7 +78,7 @@ static Chunk* currentChunk() {
 	return &current->function->chunk;
 }
 
-
+#pragma region Error handling
 static void errorAt(Token* token, char* message) {
 	if (parser.panicMode) return;
 
@@ -104,11 +105,12 @@ static void errorAtCurrent(char* message) {
 static void error(char* message) {
 	errorAt(&parser.previous, message);
 }
+#pragma endregion
 
+#pragma region Parsing helpers
 static void advance() {
 	parser.previous = parser.current;
 	for (;;) {
-		//log("q");
 		parser.current = lexToken();
 
 		if (parser.current.type != TOKEN_ERROR)	break;
@@ -124,8 +126,6 @@ static bool match(TokenType type) {
 	advance();
 	return true;
 }
-
-
 static void consume(TokenType type, char* message) {
 	if (parser.current.type == type) {
 		advance();
@@ -135,7 +135,9 @@ static void consume(TokenType type, char* message) {
 		errorAtCurrent(message);
 	}
 }
+#pragma endregion
 
+#pragma region Byte emission
 static void emitByte(uint8_t byte) {
 	writeChunk(currentChunk(), byte, parser.previous.line);
 }
@@ -147,7 +149,17 @@ static void emitReturn() {
 	emitByte(OP_NIL);
 	emitByte(OP_RETURN);
 }
+static uint8_t makeConstant(Value value) {
+	int constant = addConstant(currentChunk(), value);
+	if (constant >= UINT8_MAX) {
+		error("Too many constants in one chunk.");
+		return 0;
+	}
+	return (uint8_t)constant;
+}
+#pragma endregion
 
+#pragma region Initialization and ending
 static ObjFunction* endCompile() {
 	emitReturn();
 	ObjFunction* function = current->function;
@@ -160,15 +172,6 @@ static ObjFunction* endCompile() {
 
 	current = current->enclosing;
 	return function;
-}
-
-static uint8_t makeConstant(Value value) {
-	int constant = addConstant(currentChunk(), value);
-	if (constant >= UINT8_MAX) {
-		error("Too many constants in one chunk.");
-		return 0;
-	}
-	return (uint8_t)constant;
 }
 
 static void initCompiler(Compiler* compiler, FunctionType type) {
@@ -189,10 +192,19 @@ static void initCompiler(Compiler* compiler, FunctionType type) {
 
 	Local* local = &current->locals[current->localCount++];
 	local->depth = 0;
-	local->name.lexemeStart = "";
-	local->name.length = 0;
+
+	if (type == TYPE_FUNCTION) {
+		local->name.lexemeStart = "";
+		local->name.length = 0;
+	}
+	else
+	{
+		local->name.lexemeStart = "this";
+		local->name.length = 4;
+	}
 	local->isCaptured = false;
 }
+#pragma endregion
 
 static void expression();
 static void statement();
@@ -232,7 +244,6 @@ static void block() {
 
 static uint8_t identifierConstant(Token* name) {
 	return makeConstant(OBJ_VAL(copyString(name->lexemeStart, name->length)));; 	
-	current->function->chunk.constants;
 }
 
 static bool identifiersEqual(Token* a, Token* b) {
@@ -240,6 +251,7 @@ static bool identifiersEqual(Token* a, Token* b) {
 	return memcmp(a->lexemeStart, b->lexemeStart, a->length) == 0;
 }
 
+#pragma region Variable declaration and resolving
 static int resolveLocal(Compiler* compiler, Token* name) {
 	for (int i = compiler->localCount - 1; i >= 0 ;i--) {
 		if (identifiersEqual(name, &(compiler->locals[i].name))) {
@@ -291,7 +303,6 @@ static int resolveUpvalue(Compiler* compiler, Token* name) {
 	if (local != -1) {
 		Compiler* enclosing = compiler->enclosing;
 		enclosing->locals[local].isCaptured = true;
-		printf("ONOSNONDAODNNODONONDNDO%d", local);
 		return addUpvalue(compiler, (uint8_t)local, true);
 	}
 
@@ -356,6 +367,65 @@ static void varDeclaration() {
 	defineVariable(global);
 }
 
+static void namedVariable(Token* name, bool canAssign) {
+	uint8_t getOp, setOp;
+	int arg = resolveLocal(current, name);
+
+	if (arg != -1) {
+		getOp = OP_GET_LOCAL;
+		setOp = OP_SET_LOCAL;
+	}
+	else if ((arg = resolveUpvalue(current, name)) != -1) {
+		getOp = OP_GET_UPVALUE;
+		setOp = OP_SET_UPVALUE;
+	}
+	else {
+		getOp = OP_GET_GLOBAL;
+		setOp = OP_SET_GLOBAL;
+		arg = identifierConstant(name);
+	}
+
+	//Order below matters
+	if (canAssign && match(TOKEN_EQUAL)) {
+		expression();
+		emitBytes(setOp, arg);
+	}
+	else if (canAssign &&
+		(match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_MINUS) || match(TOKEN_STAR_EQUAL) || match(TOKEN_SLASH_EQUAL)
+			|| match(TOKEN_PERCENT_EQUAL))) {
+
+		uint8_t op;
+		switch (parser.previous.type)
+		{
+		case TOKEN_PLUS_EQUAL: op = OP_ADD; break;
+		case TOKEN_MINUS_EQUAL: op = OP_SUBTRACT; break;
+		case TOKEN_STAR_EQUAL: op = OP_MULTIPLY; break;
+		case TOKEN_SLASH_EQUAL: op = OP_DIVIDE; break;
+		case TOKEN_PERCENT_EQUAL: op = OP_MOD; break;
+
+		default: op = 0; break; //Unreachable
+		}
+		emitBytes(getOp, arg);
+		expression();
+
+		emitByte(op);
+		emitBytes(setOp, arg);
+	}
+	else if (canAssign && (match(TOKEN_PLUS_PLUS) || match(TOKEN_MINUS_MINUS))) {
+		emitBytes(getOp, arg);
+		int sign = parser.previous.type == TOKEN_PLUS_PLUS ? 1 : -1;
+		emitBytes(OP_CONSTANT, makeConstant(NUMBER_VAL(sign)));
+		emitByte(OP_ADD);
+		emitBytes(setOp, arg);
+	}
+	else {
+		emitBytes(getOp, arg);
+	}
+}
+
+#pragma endregion
+
+#pragma region Functions and return
 static void function(FunctionType type) {
 	Compiler compiler;
 	initCompiler(&compiler, type);
@@ -457,6 +527,56 @@ static void returnStatement() {
 		emitByte(OP_RETURN);
 	}
 }
+#pragma endregion
+
+#pragma region Classes
+
+static void dot(bool canAssign) {
+	consume(TOKEN_IDENTIFIER, "Expect propery name after '.'");
+	uint8_t name = identifierConstant(&parser.previous);
+	
+	if (canAssign && match(TOKEN_EQUAL)) {
+		expression();
+		emitBytes(OP_SET_PROPERTY, name);
+	}
+	else
+	{
+		emitBytes(OP_GET_PROPERTY, name);
+	}
+
+}
+
+static void method() {
+	consume(TOKEN_IDENTIFIER, "Expect method name.");
+	uint8_t constant = identifierConstant(&parser.previous);
+	
+	FunctionType type = TYPE_METHOD;
+	function(type);
+
+	emitBytes(OP_METHOD, constant);
+}
+
+static void classDeclaration() {
+	consume(TOKEN_IDENTIFIER, "Expect class name.");
+	Token className = parser.previous;
+	uint8_t nameConstant = identifierConstant(&parser.previous);
+	declareVariable();
+
+	emitBytes(OP_CLASS, nameConstant);
+
+	defineVariable(nameConstant);
+
+	namedVariable(&className, false);
+	consume(TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+	while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF))
+	{
+		method();
+	}
+	consume(TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+	emitByte(OP_POP);
+}
+
+#pragma endregion
 
 static void printStatement() {
 	expression();
@@ -469,6 +589,7 @@ static void expressionStatement() {
 	emitByte(OP_POP);
 }
 
+#pragma region Control flow
 //Returns position of the offset
 static int emitJump(uint8_t instruction) {
 	emitByte(instruction);
@@ -585,6 +706,7 @@ static void forStatement() {
 
 	endScope();
 }
+#pragma endregion
 
 static void statement() {
 	if (match(TOKEN_PRINT))
@@ -610,6 +732,8 @@ static void declaration() {
 		varDeclaration();
 	else if (match(TOKEN_FUN))
 		functionDeclaration();
+	else if (match(TOKEN_CLASS))
+		classDeclaration();
 	else
 		statement();
 }
@@ -620,61 +744,6 @@ static void number(bool canAssign) {
 }
 static void string(bool canAssign) {
 	emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(copyString(parser.previous.lexemeStart + 1, parser.previous.length - 2))));
-}
-static void namedVariable(Token* name, bool canAssign) {
-	uint8_t getOp, setOp;
-	int arg = resolveLocal(current, name);
-
-	if (arg != -1) {
-		getOp = OP_GET_LOCAL;
-		setOp = OP_SET_LOCAL;
-	}
-	else if ((arg = resolveUpvalue(current, name)) != -1) {
-		getOp = OP_GET_UPVALUE;
-		setOp = OP_SET_UPVALUE;
-	}
-	else{
-		getOp = OP_GET_GLOBAL;
-		setOp = OP_SET_GLOBAL;
-		arg = identifierConstant(name);
-	}
-
-	//Order below matters
-	if (canAssign && match(TOKEN_EQUAL)) {
-		expression();
-		emitBytes(setOp, arg);
-	} 
-	else if (canAssign && 
-		(match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_MINUS) || match(TOKEN_STAR_EQUAL) || match(TOKEN_SLASH_EQUAL)
-			|| match(TOKEN_PERCENT_EQUAL))) {
-
-		uint8_t op;
-		switch (parser.previous.type)
-		{
-		case TOKEN_PLUS_EQUAL: op = OP_ADD; break;
-		case TOKEN_MINUS_EQUAL: op = OP_SUBTRACT; break;
-		case TOKEN_STAR_EQUAL: op = OP_MULTIPLY; break;
-		case TOKEN_SLASH_EQUAL: op = OP_DIVIDE; break;
-		case TOKEN_PERCENT_EQUAL: op = OP_MOD; break;
-
-		default: op = 0; break; //Unreachable
-		}
-		emitBytes(getOp, arg);
-		expression();
-
-		emitByte(op);
-		emitBytes(setOp, arg);
-	}
-	else if (canAssign && (match(TOKEN_PLUS_PLUS) || match(TOKEN_MINUS_MINUS)) ) {
-		emitBytes(getOp, arg);
-		int sign = parser.previous.type == TOKEN_PLUS_PLUS ? 1 : -1;
-		emitBytes(OP_CONSTANT, makeConstant(NUMBER_VAL(sign)));
-		emitByte(OP_ADD);
-		emitBytes(setOp, arg);
-	}
-	else{
-		emitBytes(getOp, arg);
-	}
 }
 static void variable(bool canAssign) {
 	namedVariable(&parser.previous, canAssign);
@@ -702,6 +771,10 @@ static void and_(bool canAssign) {
 	parsePrecedence(PREC_AND);
 
 	patchJump(endJump);
+}
+
+static void this_(bool canAssign) {
+	variable(false);
 }
 
 static void unary(bool canAssign) {
@@ -754,13 +827,14 @@ static void literal(bool canAssign) {
 	}
 }
 
+#pragma region Parsing
 ParseRule rules[] = {
 [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL},
 [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
 [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
 [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
 [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
-[TOKEN_DOT] = {NULL, NULL, PREC_NONE},
+[TOKEN_DOT] = {NULL, dot, PREC_CALL},
 
 
 [TOKEN_MINUS] = {unary, binary, PREC_TERM},
@@ -799,7 +873,7 @@ ParseRule rules[] = {
 [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
 [TOKEN_RETURN] = {NULL, NULL, PREC_NONE},
 [TOKEN_SUPER] = {NULL, NULL, PREC_NONE},
-[TOKEN_THIS] = {NULL, NULL, PREC_NONE},
+[TOKEN_THIS] = {this_, NULL, PREC_NONE},
 [TOKEN_TRUE] = {literal, NULL, PREC_NONE},
 [TOKEN_VAR] = {NULL, NULL, PREC_NONE},
 [TOKEN_WHILE] = {NULL, NULL, PREC_NONE},
@@ -844,6 +918,7 @@ static void parsePrecedence(Precedence precedence) {
 		error("Invalid assignment target.");
 	}
 }
+#pragma endregion
 
 ObjFunction* compile(const char* source)
 {
@@ -868,6 +943,7 @@ ObjFunction* compile(const char* source)
 	return parser.hadError ? NULL : function;
 }
 
+//GC
 void markCompilerRoots()
 {
 	Compiler* compiler = current;

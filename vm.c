@@ -40,16 +40,20 @@ static void runtimeError(const char* format, ...) {
 
 void initVM()
 {
-	resetStack();
-	vm.objects = NULL;
-	vm.openUpvalues = NULL;
-
 	//GC
 	vm.grayCount = 0;
 	vm.grayCapacity = 0;
 	vm.grayStack = NULL;
 	vm.bytesAllocated = 0;
 	vm.nextGC = 1024 * 1024;
+
+	resetStack();
+	vm.objects = NULL;
+	vm.openUpvalues = NULL;
+
+	//Initialize as NULL to avoid GC problems
+	vm.initString = NULL;
+	vm.initString = copyString("init", 4);
 
 	initTable(&vm.internStrings);
 	initTable(&vm.globals);
@@ -62,6 +66,7 @@ void freeVM()
 	free(vm.grayStack);
 	freeTable(&vm.internStrings);
 	freeTable(&vm.globals);
+	vm.initString = NULL;
 }
 
 void push(Value value)
@@ -83,7 +88,6 @@ Value pop()
 static bool isFalse(Value value) {
 	return IS_NIL(value) || (IS_BOOL(value) && !AS_BOOL(value));
 }
-
 static void concatenate() {
 	ObjString* b = AS_STRING(peek(0));
 	ObjString* a = AS_STRING(peek(1));
@@ -101,6 +105,7 @@ static void concatenate() {
 	push(OBJ_VAL(result));
 }
 
+#pragma region Calls and methods
 static bool call(ObjClosure* closure, int argCount) {
 	ObjFunction* function = closure->function;
 	int defaultsRequired = 0;
@@ -134,20 +139,57 @@ static bool callValue(Value callee, int argCount) {
 	if (IS_OBJ(callee)) {
 		switch (OBJ_TYPE(callee))
 		{
+		case OBJ_BOUND_METHOD: {
+			ObjBoundMethod* boundMethod = AS_BOUND_METHOD(callee);
+			vm.stackPtr[-argCount - 1] = boundMethod->receiver;
+			return call(boundMethod->method, argCount);
+		}
 		case OBJ_CLASS: {
 			ObjClass* klass = AS_CLASS(callee);
-			vm.stack[-argCount - 1] = OBJ_VAL(newInstance(klass));
+			vm.stackPtr[-argCount - 1] = OBJ_VAL(newInstance(klass));
+
+			Value initializer;
+			if (tableGet(&klass->methods, vm.initString, &initializer)) {
+				return call(AS_CLOSURE(initializer), argCount);
+			}
+			else if (argCount != 0) {
+				runtimeError("Expected 0 arguments but got %d.", argCount);
+				return false;
+			}
+			return true;
 		}
 		case OBJ_CLOSURE: {
 			return call(AS_CLOSURE(callee), argCount);
 		}
-		default: break;
 		}
 	}
 	runtimeError("Can only call functions and classes.");
 	return false;
 }
 
+static bool bindMethod(ObjClass* klass, ObjString* name) {
+	Value method;
+	if (!tableGet(&klass->methods, name, &method)) {
+		runtimeError("Undefined property '%s'.", name->chars);
+		return false;
+	}
+
+	ObjBoundMethod* boundMethod = newBoundMethod(peek(0), AS_CLOSURE(method));
+
+	pop();
+	push(OBJ_VAL(boundMethod));
+	return true;
+}
+
+static void defineMethod(ObjString* name) {
+	Value method = peek(0);
+	ObjClass* klass = AS_CLASS(peek(1));
+	//Table set isn't actually setting
+	tableSet(&klass->methods, name, method);
+}
+#pragma endregion
+
+#pragma region Upvalues
 static ObjUpvalue* captureUpvalue(Value* value) {
 	ObjUpvalue* previousUpvalue = NULL;
 	ObjUpvalue* upvalue = vm.openUpvalues;
@@ -183,6 +225,7 @@ static void closeUpvariable(Value* last) {
 		vm.openUpvalues = upvalue->next;
 	}
 }
+#pragma endregion
 
 InterpretResult interpret(char* source)
 {
@@ -235,8 +278,13 @@ InterpretResult run()
 		uint8_t instruction;
 		switch (instruction = READ_BYTE())
 		{
-#pragma region Values
+		case OP_PRINT:
+			printValue(pop());
+			printf("\n");
+			break;
+		case OP_POP: pop(); break;
 
+#pragma region Values
 		case OP_CONSTANT:
 			push(READ_CONSTANT());
 			break;
@@ -345,12 +393,6 @@ InterpretResult run()
 		}
 #pragma endregion
 
-		case OP_PRINT:
-			printValue(pop());
-			printf("\n");
-			break;
-		case OP_POP: pop(); break;
-
 #pragma region Control Flow
 		case OP_JUMP_IF_FALSE: {
 			uint16_t jumpOffset = READ_SHORT();
@@ -385,10 +427,8 @@ InterpretResult run()
 				else{
 					closure->upvalues[i] = currentFrame->closure->upvalues[index];
 				}
-				printf("AABAJBJABJABSAJBAJSBJABSAJ\n");
-				printf("%.*s", AS_STRING(*closure->upvalues[i]->location)->length, AS_STRING(*closure->upvalues[i]->location)->chars);
 			}
-			push OBJ_VAL(closure);
+			push(OBJ_VAL(closure));
 
 			break;
 		}
@@ -408,6 +448,7 @@ InterpretResult run()
 			break;
 		}
 #pragma endregion
+
 #pragma region Functions
 		case OP_SET_DEFAULT: {
 			int defCount = READ_BYTE();
@@ -425,6 +466,7 @@ InterpretResult run()
 			if (!callValue(peek(argCount), argCount)) {
 				return INTERPRET_RUNTIME_ERROR;
 			}
+
 			currentFrame = &vm.frames[vm.frameCount - 1];
 			break;
 		}
@@ -465,8 +507,10 @@ InterpretResult run()
 				break;
 			}
 
-			runtimeError("Undefined property '%s'.", name->chars);
-			return INTERPRET_RUNTIME_ERROR;
+			if (!bindMethod(instance->klass, name)) {
+				return INTERPRET_RUNTIME_ERROR;
+			}
+			break;
 		}
 		case OP_SET_PROPERTY: {
 			if (!IS_INSTANCE(peek(1))) {
@@ -482,6 +526,9 @@ InterpretResult run()
 			push(popped);
 			break;
 		}
+		case OP_METHOD:
+			defineMethod(READ_STRING());
+			break;
 #pragma endregion
 		}
 	}

@@ -22,7 +22,8 @@ static Obj* allocateObj(size_t size, ObjType type) {
 	vm.objects = object;
 
 #ifdef DEBUG_LOG_GC
-	printf("%p allocate %zu for %d\n", (void*)object, size, type);
+	char* typeName = objTypeString(type);
+	printf("%p allocate %zu for %s\n", (void*)object, size, typeName);
 #endif
 
 	return object;
@@ -47,6 +48,21 @@ static uint32_t hashString(char* key, int length) {
 		hash *= 16777619;
 	}
 	return hash;
+}
+
+char* objTypeString(ObjType type)
+{
+	switch (type)
+	{
+	case OBJ_CLASS: return "OBJ_CLASS";
+	case OBJ_BOUND_METHOD: return "OBJ_BOUND_METHOD";
+	case OBJ_CLOSURE: return "OBJ_CLOSURE";
+	case OBJ_FUNCTION: return "OBJ_FUNCTION";
+	case OBJ_INSTANCE: return "OBJ_INSTANCE";
+	case OBJ_STRING: return "OBJ_STRING";
+	case OBJ_UPVALUE: return "OBJ_UPVALUE";
+	}
+	return "UNKOWN_OBJ_TYPE";
 }
 
 ObjString* takeString(char* chars, int length)
@@ -109,20 +125,35 @@ ObjClosure* newClosure(ObjFunction* function)
 
 ObjClass* newClass(ObjString* name)
 {
-	ObjClass* klass;
+	ObjClass* klass = ALLOCATE_OBJ(ObjClass, OBJ_CLASS);
 	klass->name = name;
 	klass->arity = 0;
+	initTable(&klass->methods);
 	return klass;
 }
 
 ObjInstance* newInstance(ObjClass* klass)
 {
-	ObjInstance* instance;
+	ObjInstance* instance = ALLOCATE_OBJ(ObjInstance, OBJ_INSTANCE);
 	instance->klass = klass;
 	initTable(&instance->fields);
 	return instance;
 }
 
+ObjBoundMethod* newBoundMethod(Value receiver, ObjClosure* closure)
+{
+	ObjBoundMethod* boundMethod = ALLOCATE_OBJ(ObjBoundMethod, OBJ_BOUND_METHOD);
+	boundMethod->method = closure;
+	boundMethod->receiver = receiver;
+	return boundMethod;
+}
+
+static void printFunction(ObjFunction* function) {
+	if (function->name == NULL)
+		printf("<script>");
+	else
+		printf("<func %s>", function->name->chars);
+}
 
 void printObj(Value value)
 {
@@ -133,16 +164,10 @@ void printObj(Value value)
 		break;
 
 	case OBJ_FUNCTION:
-		if (AS_FUNCTION(value)->name == NULL)
-			printf("<script>");
-		else
-			printf("<func %s>", AS_FUNCTION(value)->name->chars);
+		printFunction(AS_FUNCTION(value));
 		break;
 	case OBJ_CLOSURE:
-		if (AS_CLOSURE(value)->function->name == NULL)
-			printf("<script>");
-		else
-			printf("<func %s>", AS_CLOSURE(value)->function->name->chars);
+		printFunction(AS_CLOSURE(value)->function);
 		break;
 	case OBJ_UPVALUE: {
 		printf("upvalue");
@@ -154,6 +179,10 @@ void printObj(Value value)
 	}
 	case OBJ_INSTANCE: {
 		printf("%s instance", AS_INSTANCE(value)->klass->name->chars);
+		break;
+	}
+	case OBJ_BOUND_METHOD: {
+		printFunction(AS_BOUND_METHOD(value)->method);
 		break;
 	}
 	default:

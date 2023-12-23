@@ -1,6 +1,7 @@
 #ifdef DEBUG_LOG_GC
 #include <stdio.h>
 #include "debug.h"
+#include "object.h"
 #endif
 
 #include "memory.h"
@@ -35,7 +36,8 @@ void* reallocate(void* pointer, size_t oldSize, size_t newSize)
 
 static void freeObj(Obj* object) {
 #ifdef DEBUG_LOG_GC
-	printf("%p free type %d\n", (void*)object, object->type);
+	char* typeName = objTypeString(object->type);
+	printf("%p free type %s\n", (void*)object, typeName);
 #endif
 
 	switch (object->type)
@@ -63,6 +65,8 @@ static void freeObj(Obj* object) {
 		break;
 	}
 	case OBJ_CLASS: {
+		ObjClass* klass = (ObjClass*)object;
+		freeTable(&klass->methods);
 		FREE(ObjClass, object);
 		break;
 	}
@@ -72,8 +76,10 @@ static void freeObj(Obj* object) {
 		FREE(ObjInstance, instance);
 		break;
 	}
-	default:
+	case OBJ_BOUND_METHOD: {
+		FREE(ObjBoundMethod, object);
 		break;
+	}
 	}
 
 }
@@ -133,7 +139,7 @@ static void markRoots() {
 	}
 
 	markTable(&vm.globals);
-
+	markObj((Obj*)vm.initString);
 	markCompilerRoots();
 }
 
@@ -173,12 +179,19 @@ static void blackenObj(Obj* obj) {
 	case OBJ_CLASS: {
 		ObjClass* klass = (ObjClass*)obj;
 		markObj(klass->name);
+		markTable(&klass->methods);
 		break;
 	 }
 	case OBJ_INSTANCE: {
 		ObjInstance* instance = (ObjInstance*)obj;
 		markObj(instance->klass);
 		markTable(&instance->fields);
+		break;
+	}
+	case OBJ_BOUND_METHOD: {
+		ObjBoundMethod* boundMethod = (ObjBoundMethod*)obj;
+		markObj(boundMethod->method);
+		markValue(boundMethod->receiver);
 		break;
 	}
 	}
