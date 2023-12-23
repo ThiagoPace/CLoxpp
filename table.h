@@ -25,4 +25,8 @@ bool tableDelete(Table* table, ObjString* key);
 void tableAddAll(Table* from, Table* to);
 bool tableGet(Table* table, ObjString* key, Value* outValue);
 
+//GC
+void markTable(Table* table);
+void tableRemoveWhite(Table* table);
+
 #endif

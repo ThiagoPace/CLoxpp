@@ -30,7 +30,7 @@ ObjString* findTableString(Table* table, char* chars, int length, uint32_t hash)
 			if (IS_NIL(entry->value))	return NULL;
 		}
 		else if (entry->key->length == length && entry->key->hash == hash
-					&& memcmp(chars, entry->key->chars, length) == 0) {
+			&& memcmp(chars, entry->key->chars, length) == 0) {
 			return entry->key;
 		}
 		index = (index + 1) % table->capacity;
@@ -64,20 +64,19 @@ static void adjustCapacity(Table* table, int capacity) {
 		entries[i].key = NULL;
 		entries[i].value = NIL_VAL;
 	}
-	if (table->count > 0) {
-		table->count = 0;
-		for (int i = 0;i < capacity;i++) {
-			Entry* entry = &table->entries[i];
-			//Ignore tombstones as well
-			if (entry->key == NULL)	continue;
 
-			Entry* dest = findEntry(entries, capacity, entry->key);
-			dest->key = entry->key;
-			dest->value = entry->value;
-			table->count++;
-		}
+
+	table->count = 0;
+	for (int i = 0;i < table->capacity;i++) {
+		Entry* entry = &table->entries[i];
+		//Ignore tombstones as well
+		if (entry->key == NULL)	continue;
+
+		Entry* dest = findEntry(entries, capacity, entry->key);
+		dest->key = entry->key;
+		dest->value = entry->value;
+		table->count++;
 	}
-	
 
 	FREE_ARRAY(Entry, table->entries, table->capacity);
 	table->capacity = capacity;
@@ -118,7 +117,7 @@ bool tableDelete(Table* table, ObjString* key)
 void tableAddAll(Table* from, Table* to) {
 	for (int i = 0;i < from->capacity;i++) {
 		Entry* entry = &from->entries[i];
-		if(entry->key != NULL)
+		if (entry->key != NULL)
 			tableSet(to, entry->key, entry->value);
 	}
 }
@@ -131,4 +130,22 @@ bool tableGet(Table* table, ObjString* key, Value* outValue)
 	if (entry->key == NULL)	return false;
 	*outValue = entry->value;
 	return true;
+}
+
+void markTable(Table* table)
+{
+	for (Entry* entry = table->entries; entry < table->count; entry++) {
+		markObj(entry->key);
+		markValue(entry->value);
+	}
+}
+
+void tableRemoveWhite(Table* table)
+{
+	for (int i = 0;i < table->capacity;i++) {
+		Entry* entry = &table->entries[i];
+		if (entry->key != NULL && !entry->key->obj.gcMarked) {
+			tableDelete(table, entry->key);
+		}
+	}
 }

@@ -23,14 +23,15 @@ static void runtimeError(const char* format, ...) {
 	//NURN: pq size_t no livro e n int?
 	for (int i = vm.frameCount - 1;i >= 0;i--) {
 		CallFrame* frame = &vm.frames[i];
-		size_t instruction = frame->ip - frame->function->chunk.code - 1;
-		int line = frame->function->chunk.lines[instruction];
+		ObjFunction* function = frame->closure->function;
+		size_t instruction = frame->ip - function->chunk.code - 1;
+		int line = function->chunk.lines[instruction];
 		fprintf(stderr, "[line %d] in ", line);
-		if (frame->function->name == NULL) {
+		if (function->name == NULL) {
 			fprintf(stderr, "script\n");
 		}
 		else {
-			fprintf(stderr, "%s()\n", frame->function->name->chars);
+			fprintf(stderr, "%s()\n", function->name->chars);
 		}
 	}
 
@@ -41,6 +42,15 @@ void initVM()
 {
 	resetStack();
 	vm.objects = NULL;
+	vm.openUpvalues = NULL;
+
+	//GC
+	vm.grayCount = 0;
+	vm.grayCapacity = 0;
+	vm.grayStack = NULL;
+	vm.bytesAllocated = 0;
+	vm.nextGC = 1024 * 1024;
+
 	initTable(&vm.internStrings);
 	initTable(&vm.globals);
 }
@@ -49,6 +59,7 @@ void initVM()
 void freeVM()
 {
 	freeObjects();
+	free(vm.grayStack);
 	freeTable(&vm.internStrings);
 	freeTable(&vm.globals);
 }
@@ -74,8 +85,8 @@ static bool isFalse(Value value) {
 }
 
 static void concatenate() {
-	ObjString* b = AS_STRING(pop());
-	ObjString* a = AS_STRING(pop());
+	ObjString* b = AS_STRING(peek(0));
+	ObjString* a = AS_STRING(peek(1));
 
 	int length = a->length + b->length;
 	char* chars = ALLOCATE(char, length + 1);
@@ -84,10 +95,14 @@ static void concatenate() {
 	chars[length] = '\0';
 
 	ObjString* result = takeString(chars, length);
+
+	pop();
+	pop();
 	push(OBJ_VAL(result));
 }
 
-static bool call(ObjFunction* function, int argCount) {
+static bool call(ObjClosure* closure, int argCount) {
+	ObjFunction* function = closure->function;
 	int defaultsRequired = 0;
 	if (argCount != function->arity) {
 		if (argCount < function->arity - function->defaults || argCount > function->arity) {
@@ -107,7 +122,7 @@ static bool call(ObjFunction* function, int argCount) {
 		runtimeError("Stack overflow");
 		return false;
 	}
-	frame->function = function;
+	frame->closure = closure;
 	frame->ip = function->chunk.code;
 	frame->frameSlots = vm.stackPtr - (argCount + defaultsRequired) - 1;
 	frame->defaultsStart = vm.stackPtr - function->defaults;
@@ -119,8 +134,12 @@ static bool callValue(Value callee, int argCount) {
 	if (IS_OBJ(callee)) {
 		switch (OBJ_TYPE(callee))
 		{
-		case OBJ_FUNCTION: {
-			return call(AS_FUNCTION(callee), argCount);
+		case OBJ_CLASS: {
+			ObjClass* klass = AS_CLASS(callee);
+			vm.stack[-argCount - 1] = OBJ_VAL(newInstance(klass));
+		}
+		case OBJ_CLOSURE: {
+			return call(AS_CLOSURE(callee), argCount);
 		}
 		default: break;
 		}
@@ -129,17 +148,52 @@ static bool callValue(Value callee, int argCount) {
 	return false;
 }
 
+static ObjUpvalue* captureUpvalue(Value* value) {
+	ObjUpvalue* previousUpvalue = NULL;
+	ObjUpvalue* upvalue = vm.openUpvalues;
+
+	while (upvalue != NULL && upvalue->location > value) {
+		previousUpvalue = upvalue;
+		upvalue = upvalue->next;
+	}
+
+	if (upvalue != NULL && upvalue->location == value) {
+		return upvalue;
+	}
+
+	ObjUpvalue* createdUpvalue = newUpvalue(value);
+	createdUpvalue->next = upvalue;
+
+	if (previousUpvalue == NULL) {
+		vm.openUpvalues = createdUpvalue;
+	}
+	else{
+		previousUpvalue->next = createdUpvalue;
+	}
+
+	return createdUpvalue;
+}
+
+static void closeUpvariable(Value* last) {
+	while (vm.openUpvalues != NULL && vm.openUpvalues->location >= last)
+	{
+		ObjUpvalue* upvalue = vm.openUpvalues;
+		upvalue->closed = *upvalue->location;
+		upvalue->location = &upvalue->closed;
+		vm.openUpvalues = upvalue->next;
+	}
+}
+
 InterpretResult interpret(char* source)
 {
 	ObjFunction* function = compile(source);
 	if (function == NULL) return INTERPRET_COMPILER_ERROR;
 
 	push(OBJ_VAL(function));
-	call(function, 0);
-	/*CallFrame* frame = &vm.frames[vm.frameCount++];
-	frame->function = function;
-	frame->ip = function->chunk.code;
-	frame->frameSlots = vm.stack;*/
+	ObjClosure* closure = newClosure(function);
+	pop();
+	push(OBJ_VAL(closure));
+	call(closure, 0);
 
 	InterpretResult result = run();
 
@@ -151,7 +205,7 @@ InterpretResult run()
 	CallFrame* currentFrame = &vm.frames[vm.frameCount - 1];
 
 #define READ_BYTE() (*currentFrame->ip++)
-#define READ_CONSTANT() (currentFrame->function->chunk.constants.values[READ_BYTE()])
+#define READ_CONSTANT() (currentFrame->closure->function->chunk.constants.values[READ_BYTE()])
 #define READ_STRING() AS_STRING(READ_CONSTANT())
 #define READ_SHORT() (currentFrame->ip +=2, (uint16_t)((currentFrame->ip[-2] << 8) | currentFrame->ip[-1]))
 #define BINARY_OP(valueType, op) \
@@ -175,12 +229,14 @@ InterpretResult run()
 			printf(" ]");
 		}
 		printf("\n");
-		dissassembleInstruction(&currentFrame->function->chunk, (int)(currentFrame->ip - currentFrame->function->chunk.code));
+		dissassembleInstruction(&currentFrame->closure->function->chunk, (int)(currentFrame->ip - currentFrame->closure->function->chunk.code));
 #endif // DEBUG_TRACE_EXECUTION
 
 		uint8_t instruction;
 		switch (instruction = READ_BYTE())
 		{
+#pragma region Values
+
 		case OP_CONSTANT:
 			push(READ_CONSTANT());
 			break;
@@ -193,7 +249,9 @@ InterpretResult run()
 		case OP_FALSE:
 			push(BOOL_VAL(false));
 			break;
+#pragma endregion
 
+#pragma region Arithmetic
 		case OP_EQUAL: {
 			Value b = pop();
 			Value a = pop();
@@ -245,9 +303,9 @@ InterpretResult run()
 			push(NUMBER_VAL(a % b));
 			break;
 		}
+#pragma endregion
 
-
-
+#pragma region Variables
 		case OP_DEFINE_GLOBAL: {
 			ObjString* name = READ_STRING();
 			tableSet(&vm.globals, name, peek(0));
@@ -285,6 +343,7 @@ InterpretResult run()
 			currentFrame->frameSlots[slot] = peek(0);
 			break;
 		}
+#pragma endregion
 
 		case OP_PRINT:
 			printValue(pop());
@@ -292,6 +351,7 @@ InterpretResult run()
 			break;
 		case OP_POP: pop(); break;
 
+#pragma region Control Flow
 		case OP_JUMP_IF_FALSE: {
 			uint16_t jumpOffset = READ_SHORT();
 			if (isFalse(peek(0)))
@@ -308,10 +368,50 @@ InterpretResult run()
 			currentFrame->ip -= loopOffset;
 			break;
 		}
+#pragma endregion
 
+#pragma region Closures
+		case OP_CLOSURE: {
+			ObjFunction* function = AS_FUNCTION(READ_CONSTANT());
+			ObjClosure* closure = newClosure(function);
+
+			for (int i = 0;i < closure->upvalueCount;i++) {
+				uint8_t isLocal = READ_BYTE();
+				uint8_t index = READ_BYTE();
+
+				if (isLocal) {
+					closure->upvalues[i] = captureUpvalue(currentFrame->frameSlots + index);
+				}
+				else{
+					closure->upvalues[i] = currentFrame->closure->upvalues[index];
+				}
+				printf("AABAJBJABJABSAJBAJSBJABSAJ\n");
+				printf("%.*s", AS_STRING(*closure->upvalues[i]->location)->length, AS_STRING(*closure->upvalues[i]->location)->chars);
+			}
+			push OBJ_VAL(closure);
+
+			break;
+		}
+		case OP_GET_UPVALUE: {
+			uint8_t slot = READ_BYTE();
+			push(*currentFrame->closure->upvalues[slot]->location);
+			break;
+		}
+		case OP_SET_UPVALUE: {
+			uint8_t slot = READ_BYTE();
+			*currentFrame->closure->upvalues[slot]->location = peek(0);
+			break;
+		}
+		case OP_CLOSE_UPVALUE: {
+			closeUpvariable(vm.stackPtr - 1);
+			pop();
+			break;
+		}
+#pragma endregion
+#pragma region Functions
 		case OP_SET_DEFAULT: {
 			int defCount = READ_BYTE();
-			if (defCount < currentFrame->function->defaults - currentFrame->defaultsRequired) {
+			if (defCount < currentFrame->closure->function->defaults - currentFrame->defaultsRequired) {
 				pop();
 				break;
 			}
@@ -331,6 +431,7 @@ InterpretResult run()
 
 		case OP_RETURN: {
 			Value result = pop();
+			closeUpvariable(currentFrame->frameSlots);
 			vm.frameCount--;
 			if (vm.frameCount == 0) {
 				pop();
@@ -341,9 +442,47 @@ InterpretResult run()
 			currentFrame = &vm.frames[vm.frameCount - 1];
 			break;
 		}
+#pragma endregion
 
-		default:
+#pragma region Classes
+		case OP_CLASS: {
+			push(OBJ_VAL(newClass(READ_STRING())));
 			break;
+		}
+		case OP_GET_PROPERTY: {
+			if (!IS_INSTANCE(peek(0))) {
+				runtimeError("Only instances have properties.");
+				return INTERPRET_RUNTIME_ERROR;
+			}
+
+			ObjInstance* instance = AS_INSTANCE(peek(0));
+			ObjString* name = READ_STRING();
+
+			Value value;
+			if (tableGet(&instance->fields, name, &value)) {
+				pop();
+				push(value);
+				break;
+			}
+
+			runtimeError("Undefined property '%s'.", name->chars);
+			return INTERPRET_RUNTIME_ERROR;
+		}
+		case OP_SET_PROPERTY: {
+			if (!IS_INSTANCE(peek(1))) {
+				runtimeError("Only instances have fields.");
+				return INTERPRET_RUNTIME_ERROR;
+			}
+
+			ObjInstance* instance = AS_INSTANCE(peek(1));
+			tableSet(&instance->fields, READ_STRING(), peek(0));
+			
+			Value popped = pop();
+			pop();
+			push(popped);
+			break;
+		}
+#pragma endregion
 		}
 	}
 	

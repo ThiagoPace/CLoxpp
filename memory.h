@@ -22,4 +22,9 @@ void* reallocate(void* pointer, size_t oldSize, size_t newSize);
 
 void freeObjects();
 
+//GC
+void markValue(Value value);
+void markObj(Obj* obj);
+void collectGarbage();
+
 #endif memory_h

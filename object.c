@@ -16,8 +16,15 @@ static Obj* allocateObj(size_t size, ObjType type) {
 	Obj* object = reallocate(NULL, 0, size);
 	object->type = type;
 
+	object->gcMarked = false;
+
 	object->next = vm.objects;
 	vm.objects = object;
+
+#ifdef DEBUG_LOG_GC
+	printf("%p allocate %zu for %d\n", (void*)object, size, type);
+#endif
+
 	return object;
 }
 
@@ -27,7 +34,9 @@ static ObjString* allocateString(char* chars, int length, uint32_t hash) {
 	string->length = length;
 	string->hash = hash;
 
+	push(OBJ_VAL(string));
 	tableSet(&vm.internStrings, string, NIL_VAL);
+	pop();
 	return string;
 }
 
@@ -64,14 +73,54 @@ ObjString* copyString(const char* chars, int length)
 	return allocateString(heapString, length, hash);
 }
 
+ObjUpvalue* newUpvalue(Value* slot)
+{
+	ObjUpvalue* upvalue = ALLOCATE_OBJ(ObjUpvalue, OBJ_UPVALUE);
+	upvalue->location = slot;
+	upvalue->next = NULL;
+	upvalue->closed = NIL_VAL;
+	return upvalue;
+}
+
 ObjFunction* newFunction()
 {
 	ObjFunction* function = ALLOCATE_OBJ(ObjFunction, OBJ_FUNCTION);
 	function->arity = 0;
 	function->defaults = 0;
+	function->upvalueCount = 0;
 	function->name = NULL;
 	initChunk(&function->chunk);
 	return function;
+}
+
+ObjClosure* newClosure(ObjFunction* function)
+{
+	ObjClosure* closure = ALLOCATE_OBJ(ObjClosure, OBJ_CLOSURE);
+	closure->function = function;
+
+	ObjUpvalue** upvalues = ALLOCATE(ObjUpvalue*, function->upvalueCount);
+	for (int i = 0;i < function->upvalueCount;i++) {
+		upvalues[i] = NULL;
+	}
+	closure->upvalues = upvalues;
+	closure->upvalueCount = function->upvalueCount;
+	return closure;
+}
+
+ObjClass* newClass(ObjString* name)
+{
+	ObjClass* klass;
+	klass->name = name;
+	klass->arity = 0;
+	return klass;
+}
+
+ObjInstance* newInstance(ObjClass* klass)
+{
+	ObjInstance* instance;
+	instance->klass = klass;
+	initTable(&instance->fields);
+	return instance;
 }
 
 
@@ -89,7 +138,24 @@ void printObj(Value value)
 		else
 			printf("<func %s>", AS_FUNCTION(value)->name->chars);
 		break;
-
+	case OBJ_CLOSURE:
+		if (AS_CLOSURE(value)->function->name == NULL)
+			printf("<script>");
+		else
+			printf("<func %s>", AS_CLOSURE(value)->function->name->chars);
+		break;
+	case OBJ_UPVALUE: {
+		printf("upvalue");
+		break;
+	}
+	case OBJ_CLASS: {
+		printf("%s", AS_CLASS(value)->name->chars);
+		break;
+	}
+	case OBJ_INSTANCE: {
+		printf("%s instance", AS_INSTANCE(value)->klass->name->chars);
+		break;
+	}
 	default:
 		break;
 	}

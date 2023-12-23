@@ -11,7 +11,7 @@
 
 
 typedef struct {
-	ObjFunction* function;
+	ObjClosure* closure;
 	uint8_t* ip;
 	Value* frameSlots;
 	Value* defaultsStart;
@@ -30,6 +30,8 @@ typedef struct {
 	CallFrame frames[FRAMES_MAX];
 	int frameCount;
 
+	ObjUpvalue* openUpvalues;
+
 	//Value stack
 	Value stack[STACK_MAX];
 	Value* stackPtr;
@@ -39,6 +41,14 @@ typedef struct {
 	Table internStrings;
 	//Variables
 	Table globals;
+
+	//GC
+	int grayCapacity;
+	int grayCount;
+	Obj** grayStack;
+
+	size_t bytesAllocated;
+	size_t nextGC;
 } VM;
 
 //A bit NURN
