@@ -55,6 +55,7 @@ typedef struct {
 typedef enum {
 	TYPE_SCRIPT,
 	TYPE_METHOD,
+	TYPE_INIT,
 	TYPE_FUNCTION,
 } FunctionType;
 
@@ -146,7 +147,13 @@ static void emitBytes(uint8_t byte1, uint8_t byte2) {
 	emitByte(byte2);
 }
 static void emitReturn() {
-	emitByte(OP_NIL);
+	if (current->type == TYPE_INIT) {
+		emitBytes(OP_GET_LOCAL, 0);
+	}
+	else
+	{
+		emitByte(OP_NIL);
+	}
 	emitByte(OP_RETURN);
 }
 static uint8_t makeConstant(Value value) {
@@ -391,8 +398,8 @@ static void namedVariable(Token* name, bool canAssign) {
 		emitBytes(setOp, arg);
 	}
 	else if (canAssign &&
-		(match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_MINUS) || match(TOKEN_STAR_EQUAL) || match(TOKEN_SLASH_EQUAL)
-			|| match(TOKEN_PERCENT_EQUAL))) {
+		(match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_EQUAL) || match(TOKEN_STAR_EQUAL) 
+			|| match(TOKEN_SLASH_EQUAL) || match(TOKEN_PERCENT_EQUAL))) {
 
 		uint8_t op;
 		switch (parser.previous.type)
@@ -518,6 +525,9 @@ static void returnStatement() {
 	if (current->type == TYPE_SCRIPT) {
 		error("Can't return from top-level code.");
 	}
+	else if (current->type == TYPE_INIT) {
+		error("Can't return a value from an initializer.");
+	}
 	if (match(TOKEN_SEMICOLON)) {
 		emitReturn();
 	}
@@ -551,6 +561,9 @@ static void method() {
 	uint8_t constant = identifierConstant(&parser.previous);
 	
 	FunctionType type = TYPE_METHOD;
+	if (parser.previous.length == 4 && memcmp(parser.previous.lexemeStart, "init", 4) == 0) {
+		type = TYPE_INIT;
+	}
 	function(type);
 
 	emitBytes(OP_METHOD, constant);

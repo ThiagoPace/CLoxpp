@@ -28,7 +28,7 @@ void* reallocate(void* pointer, size_t oldSize, size_t newSize)
 
 	if (vm.bytesAllocated >= vm.nextGC) {
 		vm.nextGC = vm.bytesAllocated * GC_HEAP_GROW_FACTOR;
-		collectGarbage();
+		//collectGarbage();
 	}
 
 	return result;

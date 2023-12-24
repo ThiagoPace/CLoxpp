@@ -51,12 +51,13 @@ void initVM()
 	vm.objects = NULL;
 	vm.openUpvalues = NULL;
 
-	//Initialize as NULL to avoid GC problems
-	vm.initString = NULL;
-	vm.initString = copyString("init", 4);
 
 	initTable(&vm.internStrings);
 	initTable(&vm.globals);
+
+	//Initialize as NULL to avoid GC problems
+	vm.initString = NULL;
+	vm.initString = copyString("init", 4);
 }
 
 
