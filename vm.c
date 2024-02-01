@@ -187,6 +187,7 @@ static void defineMethod(ObjString* name) {
 	ObjClass* klass = AS_CLASS(peek(1));
 	//Table set isn't actually setting
 	tableSet(&klass->methods, name, method);
+	//pop();
 }
 #pragma endregion
 
